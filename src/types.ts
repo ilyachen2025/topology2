@@ -1,5 +1,6 @@
 export type GroupChargerConfig = {
   id: string;
+  hostName: string;
   power: string;
   quantity: number;
   terminalName: string;

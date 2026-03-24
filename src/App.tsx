@@ -12,6 +12,7 @@ const defaultConfig: StationConfig = {
   groupChargers: [
     {
       id: '1',
+      hostName: '群控主机',
       power: '720kW',
       quantity: 2,
       terminalName: '分体式双枪直流充电桩外机',
@@ -48,12 +49,13 @@ const schema: Schema = {
       items: {
         type: Type.OBJECT,
         properties: {
+          hostName: { type: Type.STRING },
           power: { type: Type.STRING },
           quantity: { type: Type.INTEGER },
           terminalName: { type: Type.STRING },
           terminalQuantity: { type: Type.INTEGER }
         },
-        required: ["power", "quantity", "terminalName", "terminalQuantity"]
+        required: ["hostName", "power", "quantity", "terminalName", "terminalQuantity"]
       }
     },
     storageSystem: {
@@ -99,6 +101,11 @@ export default function App() {
       const response = await ai.models.generateContent({
         model: "gemini-3.1-flash-preview",
         contents: `Parse the following description of a solar-storage-charging station topology into JSON.
+CRITICAL INSTRUCTIONS:
+1. If the description explicitly states there is no storage system (光储充系统) or battery cabinet, or if it's not mentioned at all, you MUST omit the storageSystem field entirely (do not include it in the JSON).
+2. If a host has no terminals (e.g., "下面不带终端"), set terminalQuantity to 0.
+3. Do not hallucinate values. If a value is not mentioned, use "0" or 0.
+4. Extract the host name (e.g., "群控主机", "双枪均分一体机") into hostName. If not specified, default to "群控主机".
 Description: ${prompt}`,
         config: {
           responseMimeType: "application/json",
@@ -109,10 +116,40 @@ Description: ${prompt}`,
       
       const parsed = JSON.parse(response.text);
       
+      let storageSystem = parsed.storageSystem || null;
+      if (storageSystem) {
+        const checkFields = ['batteryPower', 'equipmentPower', 'dcdcPower', 'fastChargerPower', 'fastChargerQuantity'];
+        const hasValidValues = checkFields.some(field => {
+          const v = storageSystem[field];
+          if (typeof v === 'string') {
+            const num = parseFloat(v);
+            return !isNaN(num) && num > 0;
+          }
+          if (typeof v === 'number') {
+            return v > 0;
+          }
+          return false;
+        });
+        if (!hasValidValues) {
+          storageSystem = null;
+        }
+      }
+
+      if (!storageSystem) {
+        storageSystem = {
+          batteryPower: '',
+          equipmentPower: '',
+          dcdcPower: '',
+          fastChargerPower: '',
+          fastChargerQuantity: 0,
+          fastChargerName: '快充桩'
+        };
+      }
+      
       setConfig({
         transformerName: '变压器#1',
         groupChargers: parsed.groupChargers.map((gc: any, i: number) => ({ ...gc, id: String(i) })) || [],
-        storageSystem: parsed.storageSystem || null
+        storageSystem
       });
     } catch (error) {
       console.error("Failed to parse description:", error);
@@ -225,11 +262,19 @@ Description: ${prompt}`,
           {activeTab === 'config' && (
             <div className="space-y-6">
               <div>
-                <h3 className="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">群控充电系统</h3>
+                <h3 className="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">充电系统 (群充/一体机)</h3>
                 {config.groupChargers.map((gc, i) => (
                   <div key={gc.id} className="p-3 bg-gray-50 border border-gray-200 rounded-lg mb-3 space-y-3">
                     <div className="flex gap-2">
                       <div className="flex-1">
+                        <label className="block text-xs text-gray-500 mb-1">主机名称</label>
+                        <input type="text" value={gc.hostName || '群控主机'} onChange={e => {
+                          const newGc = [...config.groupChargers];
+                          newGc[i].hostName = e.target.value;
+                          setConfig({...config, groupChargers: newGc});
+                        }} className="w-full p-1.5 text-sm border rounded" />
+                      </div>
+                      <div className="w-24">
                         <label className="block text-xs text-gray-500 mb-1">主机功率</label>
                         <input type="text" value={gc.power} onChange={e => {
                           const newGc = [...config.groupChargers];
@@ -237,7 +282,7 @@ Description: ${prompt}`,
                           setConfig({...config, groupChargers: newGc});
                         }} className="w-full p-1.5 text-sm border rounded" />
                       </div>
-                      <div className="w-20">
+                      <div className="w-16">
                         <label className="block text-xs text-gray-500 mb-1">数量</label>
                         <input type="number" value={gc.quantity} onChange={e => {
                           const newGc = [...config.groupChargers];
@@ -318,7 +363,7 @@ Description: ${prompt}`,
               
               {[
                 { key: 'transformer', label: '变压器' },
-                { key: 'group_charger', label: '群控主机' },
+                { key: 'group_charger', label: '主机 (群控/一体机)' },
                 { key: 'split_charger', label: '分体式充电桩' },
                 { key: 'battery_cabinet', label: '电池柜' },
                 { key: 'equipment_cabinet', label: '设备柜' },
@@ -355,8 +400,8 @@ Description: ${prompt}`,
           </button>
         </div>
         
-        <div className="flex-1 overflow-auto p-8 flex items-start justify-center">
-          <div className="bg-white shadow-sm border border-gray-200 overflow-hidden" style={{ minWidth: 'max-content' }}>
+        <div className="flex-1 overflow-auto p-8">
+          <div className="bg-white shadow-sm border border-gray-200 overflow-hidden mx-auto" style={{ width: 'max-content' }}>
             <TopologyCanvas ref={canvasRef} config={config} images={images} />
           </div>
         </div>

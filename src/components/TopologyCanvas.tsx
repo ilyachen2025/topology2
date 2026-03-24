@@ -21,11 +21,11 @@ const TERMINAL_SLOT = TERMINAL_WIDTH + TERMINAL_GAP;
 
 const LEVEL_Y = {
   TRANSFORMER: 200,
-  BUS_1: 450,
-  HOSTS: 800,
-  DCDC: 1200,
-  BUS_2: 1450,
-  TERMINALS: 1700
+  BUS_1: 425,
+  HOSTS: 675,
+  DCDC: 1075,
+  BUS_2: 1325,
+  TERMINALS: 1575
 };
 
 function DeviceNode({ x, y, image, fallback, label, subLabel, width = 120, height = 150, labelPos = 'bottom', imageOffsetX = 0, imageScale = 1, objectFit = 'contain' }: any) {
@@ -63,7 +63,7 @@ function DeviceNode({ x, y, image, fallback, label, subLabel, width = 120, heigh
 
 export const TopologyCanvas = forwardRef<HTMLDivElement, Props>(({ config, images }, ref) => {
   const branches: any[] = [];
-  let currentX = 225; // Left padding
+  let currentX = 400; // Left padding increased to prevent text cutoff
 
   config.groupChargers.forEach((gc, gcIndex) => {
     for (let i = 0; i < gc.quantity; i++) {
@@ -80,8 +80,16 @@ export const TopologyCanvas = forwardRef<HTMLDivElement, Props>(({ config, image
     }
   });
 
-  if (config.storageSystem) {
-    const branchWidth = Math.max(config.storageSystem.fastChargerQuantity * TERMINAL_SLOT, 600);
+  const hasValidStorage = config.storageSystem && (
+    (config.storageSystem.batteryPower && parseFloat(config.storageSystem.batteryPower) > 0) ||
+    (config.storageSystem.equipmentPower && parseFloat(config.storageSystem.equipmentPower) > 0) ||
+    (config.storageSystem.dcdcPower && parseFloat(config.storageSystem.dcdcPower) > 0) ||
+    (config.storageSystem.fastChargerPower && parseFloat(config.storageSystem.fastChargerPower) > 0) ||
+    (config.storageSystem.fastChargerQuantity > 0)
+  );
+
+  if (hasValidStorage) {
+    const branchWidth = Math.max(config.storageSystem!.fastChargerQuantity * TERMINAL_SLOT, 600);
     branches.push({
       type: 'storage_system',
       data: config.storageSystem,
@@ -92,38 +100,57 @@ export const TopologyCanvas = forwardRef<HTMLDivElement, Props>(({ config, image
     currentX += branchWidth + 120;
   }
 
-  const totalWidth = Math.max(currentX, 1200);
-  const transformerX = totalWidth / 2;
+  // Calculate exact total width needed (400 left padding + branches + 400 right padding - 120 extra gap)
+  const totalWidth = branches.length > 0 ? currentX - 120 + 400 : 1200;
+  
+  const transformerX = branches.length > 0 
+    ? (branches[0].centerX + branches[branches.length - 1].centerX) / 2 
+    : totalWidth / 2;
 
   return (
-    <div ref={ref} className="relative bg-white" style={{ width: totalWidth, height: 2000 }}>
+    <div ref={ref} className="relative bg-white mx-auto" style={{ width: totalWidth, height: 1900 }}>
       {/* Lines Layer */}
-      <svg className="absolute inset-0 pointer-events-none" width={totalWidth} height={2000}>
+      <svg className="absolute inset-0 pointer-events-none" width={totalWidth} height={1900}>
         {/* Transformer to Bus 1 */}
         <line x1={transformerX} y1={LEVEL_Y.TRANSFORMER + 80} x2={transformerX} y2={LEVEL_Y.BUS_1} stroke="#333" strokeWidth="3" />
 
         {/* Bus 1 */}
         {branches.length > 0 && (
-          <line x1={branches[0].centerX} y1={LEVEL_Y.BUS_1} x2={branches[branches.length - 1].centerX} y2={LEVEL_Y.BUS_1} stroke="#333" strokeWidth="3" />
+          <line
+            x1={Math.min(transformerX, branches[0].centerX)}
+            y1={LEVEL_Y.BUS_1}
+            x2={Math.max(transformerX, branches[branches.length - 1].centerX)}
+            y2={LEVEL_Y.BUS_1}
+            stroke="#333"
+            strokeWidth="3"
+          />
         )}
 
         {branches.map((branch, i) => {
           if (branch.type === 'group_charger') {
             const gc = branch.data as GroupChargerConfig;
             const startX = branch.centerX - ((gc.terminalQuantity - 1) * TERMINAL_SLOT) / 2;
+            const isIntegrated = gc.terminalQuantity === 0 || 
+                                 (gc.hostName && (gc.hostName.includes('一体机') || gc.hostName.includes('双枪'))) ||
+                                 (gc.terminalName && gc.terminalName.includes('一体机'));
+            // Align bottoms: host height is 280 (half is 140), terminal height is 260 (half is 130).
+            // To align bottoms at 1430 (1300 + 130), host center should be at 1430 - 140 = 1290.
+            const hostY = isIntegrated ? LEVEL_Y.TERMINALS - 10 : LEVEL_Y.HOSTS;
 
             return (
               <g key={`gc-${i}`}>
                 {/* Bus 1 to Host */}
-                <line x1={branch.centerX} y1={LEVEL_Y.BUS_1} x2={branch.centerX} y2={LEVEL_Y.HOSTS - 110} stroke="#333" strokeWidth="3" />
+                <line x1={branch.centerX} y1={LEVEL_Y.BUS_1} x2={branch.centerX} y2={hostY - 110} stroke="#333" strokeWidth="3" />
                 {/* Host to Bus 2 */}
-                <line x1={branch.centerX} y1={LEVEL_Y.HOSTS + 110} x2={branch.centerX} y2={LEVEL_Y.BUS_2} stroke="#333" strokeWidth="3" />
+                {!isIntegrated && gc.terminalQuantity > 0 && (
+                  <line x1={branch.centerX} y1={LEVEL_Y.HOSTS + 110} x2={branch.centerX} y2={LEVEL_Y.BUS_2} stroke="#333" strokeWidth="3" />
+                )}
                 {/* Bus 2 */}
-                {gc.terminalQuantity > 1 && (
+                {!isIntegrated && gc.terminalQuantity > 1 && (
                   <line x1={startX} y1={LEVEL_Y.BUS_2} x2={startX + (gc.terminalQuantity - 1) * TERMINAL_SLOT} y2={LEVEL_Y.BUS_2} stroke="#333" strokeWidth="3" />
                 )}
                 {/* Bus 2 to Terminals */}
-                {Array.from({ length: gc.terminalQuantity }).map((_, j) => {
+                {!isIntegrated && Array.from({ length: gc.terminalQuantity }).map((_, j) => {
                   const tx = startX + j * TERMINAL_SLOT;
                   return <line key={j} x1={tx} y1={LEVEL_Y.BUS_2} x2={tx} y2={LEVEL_Y.TERMINALS - 100} stroke="#333" strokeWidth="3" />
                 })}
@@ -140,7 +167,9 @@ export const TopologyCanvas = forwardRef<HTMLDivElement, Props>(({ config, image
                 {/* Equipment to DCDC */}
                 <line x1={branch.centerX} y1={LEVEL_Y.HOSTS + 110} x2={branch.centerX} y2={LEVEL_Y.DCDC - 110} stroke="#333" strokeWidth="3" />
                 {/* DCDC to Bus 2 */}
-                <line x1={branch.centerX} y1={LEVEL_Y.DCDC + 110} x2={branch.centerX} y2={LEVEL_Y.BUS_2} stroke="#333" strokeWidth="3" />
+                {ss.fastChargerQuantity > 0 && (
+                  <line x1={branch.centerX} y1={LEVEL_Y.DCDC + 110} x2={branch.centerX} y2={LEVEL_Y.BUS_2} stroke="#333" strokeWidth="3" />
+                )}
                 {/* Bus 2 */}
                 {ss.fastChargerQuantity > 1 && (
                   <line x1={startX} y1={LEVEL_Y.BUS_2} x2={startX + (ss.fastChargerQuantity - 1) * TERMINAL_SLOT} y2={LEVEL_Y.BUS_2} stroke="#333" strokeWidth="3" />
@@ -175,22 +204,26 @@ export const TopologyCanvas = forwardRef<HTMLDivElement, Props>(({ config, image
         if (branch.type === 'group_charger') {
           const gc = branch.data as GroupChargerConfig;
           const startX = branch.centerX - ((gc.terminalQuantity - 1) * TERMINAL_SLOT) / 2;
+          const isIntegrated = gc.terminalQuantity === 0 || 
+                               (gc.hostName && (gc.hostName.includes('一体机') || gc.hostName.includes('双枪'))) ||
+                               (gc.terminalName && gc.terminalName.includes('一体机'));
+          const hostY = isIntegrated ? LEVEL_Y.TERMINALS - 10 : LEVEL_Y.HOSTS;
 
           return (
             <React.Fragment key={`gc-nodes-${i}`}>
               <DeviceNode
                 x={branch.centerX}
-                y={LEVEL_Y.HOSTS}
+                y={hostY}
                 image={images.group_charger}
                 fallback={<GroupChargerIcon />}
                 label={gc.power}
-                subLabel="群控主机"
+                subLabel={gc.hostName || '群控主机'}
                 labelPos="left"
                 width={200}
                 height={280}
                 objectFit="fill"
               />
-              {Array.from({ length: gc.terminalQuantity }).map((_, j) => {
+              {!isIntegrated && Array.from({ length: gc.terminalQuantity }).map((_, j) => {
                 const tx = startX + j * TERMINAL_SLOT;
                 return (
                   <DeviceNode
@@ -206,16 +239,18 @@ export const TopologyCanvas = forwardRef<HTMLDivElement, Props>(({ config, image
                 );
               })}
               {/* Label for terminals */}
-              <div
-                className="absolute text-3xl text-gray-800 font-bold text-center"
-                style={{
-                  left: branch.centerX - 225,
-                  top: LEVEL_Y.TERMINALS + 160,
-                  width: 450
-                }}
-              >
-                {gc.terminalName}*{gc.terminalQuantity}
-              </div>
+              {!isIntegrated && gc.terminalQuantity > 0 && (
+                <div
+                  className="absolute text-3xl text-gray-800 font-bold text-center"
+                  style={{
+                    left: branch.centerX - 225,
+                    top: LEVEL_Y.TERMINALS + 160,
+                    width: 450
+                  }}
+                >
+                  {gc.terminalName}*{gc.terminalQuantity}
+                </div>
+              )}
             </React.Fragment>
           );
         } else if (branch.type === 'storage_system') {
@@ -288,16 +323,18 @@ export const TopologyCanvas = forwardRef<HTMLDivElement, Props>(({ config, image
                 );
               })}
               {/* Label for fast chargers */}
-              <div
-                className="absolute text-3xl text-gray-800 font-bold text-center"
-                style={{
-                  left: branch.centerX - 225,
-                  top: LEVEL_Y.TERMINALS + 160,
-                  width: 450
-                }}
-              >
-                {ss.fastChargerPower}{ss.fastChargerName}*{ss.fastChargerQuantity}
-              </div>
+              {ss.fastChargerQuantity > 0 && (
+                <div
+                  className="absolute text-3xl text-gray-800 font-bold text-center"
+                  style={{
+                    left: branch.centerX - 225,
+                    top: LEVEL_Y.TERMINALS + 160,
+                    width: 450
+                  }}
+                >
+                  {ss.fastChargerPower}{ss.fastChargerName}*{ss.fastChargerQuantity}
+                </div>
+              )}
             </React.Fragment>
           );
         }
